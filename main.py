@@ -311,7 +311,7 @@ class MainWindow(QMainWindow):
         root_widget.setStyleSheet("QFrame#Root { background-color: #121212; border: 1px solid #444; border-radius: 8px; }")
         self.setCentralWidget(root_widget)
         root_layout = QVBoxLayout(root_widget); root_layout.setContentsMargins(0, 0, 0, 0); root_layout.setSpacing(0)
-        self.title_bar = CustomTitleBar(self, title="JustFloat Oscilloscope Pro v10.0 (Tab+Button+Reliable)")
+        self.title_bar = CustomTitleBar(self, title="JustFloat Oscilloscope Pro v11.0 (Final Stable)")
         root_layout.addWidget(self.title_bar)
 
         content_widget = QWidget(); main_layout = QHBoxLayout(content_widget); main_layout.setContentsMargins(15, 15, 15, 15)
@@ -378,6 +378,15 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.tabs)
 
         self.plot_container = QWidget(); self.grid_layout = QGridLayout(self.plot_container); self.grid_layout.setSpacing(10); self.grid_layout.setContentsMargins(0,0,0,0)
+        
+        # =========================================================================
+        # [核心修复] 强制锁定网格比例
+        # 无论控件如何插拔，强制 3列 均分宽度，2行 均分高度，防止抖动
+        # =========================================================================
+        self.grid_layout.setColumnStretch(0, 1); self.grid_layout.setColumnStretch(1, 1); self.grid_layout.setColumnStretch(2, 1)
+        self.grid_layout.setRowStretch(0, 1); self.grid_layout.setRowStretch(1, 1)
+        # =========================================================================
+
         self.plot_widgets = {}; self.placeholders = {}; self.detached_windows = {}
         for i in range(6):
             p_widget = SmartPlotWidget(i+1, self.colors[i])
@@ -413,7 +422,8 @@ class MainWindow(QMainWindow):
             QPushButton:pressed { background: #222; }
             QPushButton:disabled { background: #222; color: #555; }
         """)
-        btn_send.clicked.connect(lambda: self.send_target_value(idx))
+        # 使用 checked=False, i=idx 避免闭包问题
+        btn_send.clicked.connect(lambda checked=False, i=idx: self.send_target_value(i))
         
         val_lbl = QLabel("0.00"); val_lbl.setFixedWidth(80); val_lbl.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
         val_lbl.setStyleSheet(f"color: {self.colors[idx]}; font-family: Consolas; font-weight: bold; font-size: 14px;")
@@ -433,7 +443,12 @@ class MainWindow(QMainWindow):
 
     def send_target_value(self, idx):
         if self.serial_thread and self.serial_thread.isRunning():
+            # ============================================================
+            # [核心修复] 主动移走焦点
+            # 防止 spinBox 变灰后，焦点自动跳到下一个通道的 spinBox 导致误触
+            # ============================================================
             self.setFocus()
+            
             # 锁定 UI
             self.ctrl_widgets[idx].spin.setEnabled(False) 
             self.ctrl_widgets[idx].btn_send.setEnabled(False) 
