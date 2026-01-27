@@ -5,20 +5,22 @@ import pyqtgraph as pg
 import serial
 import serial.tools.list_ports
 import time
+from datetime import datetime
 from collections import deque
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QGridLayout, QLabel, QDoubleSpinBox, QSpinBox,
                                QFrame, QPushButton, QSplitter, QComboBox, QDialog, 
-                               QSizePolicy, QGroupBox, QMessageBox, QSizeGrip, QTextEdit)
+                               QSizePolicy, QGroupBox, QMessageBox, QSizeGrip, QTextEdit,
+                               QTabWidget)
 from PySide6.QtCore import (Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, 
                             QPoint, Signal, QThread, Slot, QObject, QSize, QRect)
 from PySide6.QtGui import QColor, QPainter, QFont, QIcon, QAction
 
 # -----------------------------------------------------------------------------
-# 1. 全局配置 (v6.1 极速版配置)
+# 1. 全局配置
 # -----------------------------------------------------------------------------
-pg.setConfigOptions(antialias=False) # 关闭抗锯齿
+pg.setConfigOptions(antialias=False) 
 try:
     import OpenGL
     pg.setConfigOption('useOpenGL', True)
@@ -57,9 +59,9 @@ class CustomTitleBar(QWidget):
     def toggle_max_restore(self):
         win = self.window()
         if win.isMaximized():
-            win.showNormal(); self.btn_max.setText("□"); win.setStyleSheet("QMainWindow { background-color: #121212; border-radius: 8px; }") 
+            win.showNormal(); self.btn_max.setText("□")
         else:
-            win.showMaximized(); self.btn_max.setText("❐"); win.setStyleSheet("QMainWindow { background-color: #121212; border-radius: 0px; }")
+            win.showMaximized(); self.btn_max.setText("❐")
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton: self.start_pos = event.globalPosition().toPoint()
     def mouseMoveEvent(self, event):
@@ -71,18 +73,15 @@ class CustomTitleBar(QWidget):
         if hasattr(self, 'btn_max'): self.toggle_max_restore()
 
 # =============================================================================
-# 3. 串口线程 (包含发送和混合协议解析)
+# 3. 串口线程 (V6.3 逻辑)
 # =============================================================================
 class SerialWorker(QThread):
-    data_received = Signal(list)      # 波形数据信号
-    log_message = Signal(str, str)    # 日志信号 (message, color)
+    data_received = Signal(list)      
+    log_message = Signal(str, str)    
     
     def __init__(self, port_name, baud_rate):
         super().__init__()
-        self.port_name = port_name
-        self.baud_rate = baud_rate
-        self.is_running = True
-        self.ser = None
+        self.port_name = port_name; self.baud_rate = baud_rate; self.is_running = True; self.ser = None
 
     def run(self):
         try:
@@ -92,74 +91,46 @@ class SerialWorker(QThread):
             self.log_message.emit(f"Serial Error: {e}", "#FF0000")
             return
 
-        TAIL = b'\x00\x00\x80\x7f'
-        MAX_FLOATS = 6
-        MAX_DATA_LEN = MAX_FLOATS * 4
-        buffer = b''
+        TAIL = b'\x00\x00\x80\x7f'; MAX_FLOATS = 6; MAX_DATA_LEN = MAX_FLOATS * 4; buffer = b''
 
         while self.is_running and self.ser.is_open:
             try:
                 if self.ser.in_waiting:
-                    # 读取数据
-                    chunk = self.ser.read(self.ser.in_waiting)
-                    buffer += chunk
+                    chunk = self.ser.read(self.ser.in_waiting); buffer += chunk
                     
-                    # --- 1. 优先检查文本回复 (如 "Success") ---
                     if b'Success' in buffer:
-                        self.log_message.emit("Rx: Success", "#00FF00") # 绿色显示成功
-                        buffer = buffer.replace(b'Success', b'') # 移除已处理文本
+                        self.log_message.emit("Rx: Success", "#00FF00") 
+                        buffer = buffer.replace(b'Success', b'') 
                     
-                    # --- 2. 解析 JustFloat 波形数据 ---
                     while len(buffer) >= 8:
                         tail_idx = buffer.find(TAIL)
                         if tail_idx == -1:
-                            if len(buffer) > 200: # 缓冲区过大防溢出
-                                buffer = buffer[-50:]
+                            if len(buffer) > 200: buffer = buffer[-50:]
                             break
-                        
-                        pre_tail_len = tail_idx
-                        valid_len = min(pre_tail_len, MAX_DATA_LEN)
-                        remainder = valid_len % 4
-                        valid_len -= remainder
-                        
+                        pre_tail_len = tail_idx; valid_len = min(pre_tail_len, MAX_DATA_LEN)
+                        remainder = valid_len % 4; valid_len -= remainder
                         if valid_len > 0:
-                            packet = buffer[tail_idx - valid_len : tail_idx]
-                            float_count = valid_len // 4
-                            try:
-                                floats = struct.unpack(f'<{float_count}f', packet)
-                                self.data_received.emit(list(floats))
-                            except Exception:
-                                pass
-                        
-                        # 移除处理过的数据
+                            packet = buffer[tail_idx - valid_len : tail_idx]; float_count = valid_len // 4
+                            try: floats = struct.unpack(f'<{float_count}f', packet); self.data_received.emit(list(floats))
+                            except Exception: pass
                         buffer = buffer[tail_idx + 4:]
-                        
             except Exception as e:
-                self.log_message.emit(f"Loop Error: {e}", "#FF0000")
-                break
-            
+                self.log_message.emit(f"Loop Error: {e}", "#FF0000"); break
             self.msleep(1)
-
-        if self.ser:
-            self.ser.close()
+        if self.ser: self.ser.close()
 
     def send_command(self, cmd_str):
-        """发送指令到串口"""
         if self.ser and self.ser.is_open:
             try:
                 self.ser.write(cmd_str.encode('utf-8'))
-                self.log_message.emit(f"Tx: {cmd_str}", "#00E5FF") # 蓝色显示发送
-            except Exception as e:
-                self.log_message.emit(f"Send Error: {e}", "#FF0000")
-        else:
-            self.log_message.emit("Error: Serial not connected", "#FF0000")
+                self.log_message.emit(f"Tx: {cmd_str}", "#00E5FF") 
+            except Exception as e: self.log_message.emit(f"Send Error: {e}", "#FF0000")
+        else: self.log_message.emit("Error: Serial not connected", "#FF0000")
 
-    def stop(self):
-        self.is_running = False
-        self.wait()
+    def stop(self): self.is_running = False; self.wait()
 
 # =============================================================================
-# 4. UI 组件 (Toggle, Log 等)
+# 4. UI 组件
 # =============================================================================
 class AnimatedToggle(QWidget):
     def __init__(self, parent=None, active_color="#00E5FF"):
@@ -198,16 +169,16 @@ class DetachedWindow(QDialog):
     def __init__(self, channel_id, content_widget, parent=None):
         super().__init__(parent)
         self.channel_id = channel_id; self.content_widget = content_widget
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window); self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        # 移除透明背景，防止界面不显示
         self.resize(800, 500)
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
         self.container = QFrame()
-        self.container.setStyleSheet("QFrame { background-color: #121212; border: 1px solid #444; border-radius: 8px; }")
+        self.container.setStyleSheet("QFrame { background-color: #121212; border: 1px solid #444; }")
         container_layout = QVBoxLayout(self.container); container_layout.setContentsMargins(0, 0, 0, 0); container_layout.setSpacing(0)
         self.title_bar = CustomTitleBar(self, title=f"Channel {channel_id} - Monitor")
-        self.title_bar.setStyleSheet("QWidget { background-color: #1e1e1e; border-bottom: 1px solid #333; border-top-left-radius: 8px; border-top-right-radius: 8px; } QLabel { color: #ccc; font-weight: bold; font-size: 13px; border:none; }")
         container_layout.addWidget(self.title_bar)
-        content_area = QWidget(); content_area.setStyleSheet("border: none; border-radius: 0px;") 
+        content_area = QWidget(); content_area.setStyleSheet("border: none;") 
         c_layout = QVBoxLayout(content_area); c_layout.setContentsMargins(0, 0, 0, 0); c_layout.addWidget(self.content_widget)
         container_layout.addWidget(content_area)
         layout.addWidget(self.container)
@@ -256,7 +227,6 @@ class SmartPlotWidget(QFrame):
         self.plot_item.setMouseEnabled(x=True, y=True)
         self.plot_item.hideButtons()
         
-        # --- v6.1 极速版配置 ---
         self.plot_item.setClipToView(True) 
         self.plot_item.setDownsampling(auto=False)
         self.plot_item.getPlotItem().layout.setContentsMargins(0, 5, 0, 0)
@@ -266,58 +236,35 @@ class SmartPlotWidget(QFrame):
         self.plot_item.addItem(self.target_line)
         layout.addWidget(header); layout.addWidget(self.plot_item)
         
-        self.raw_t = None
-        self.raw_data = None
-        
+        self.raw_t = None; self.raw_data = None
         self.plot_item.sigXRangeChanged.connect(self.refresh_view)
         self.update_x_range(self.combo_time.currentText())
 
     def update_x_range(self, text):
-        if text == "All":
-            self.plot_item.enableAutoRange(axis='x')
+        if text == "All": self.plot_item.enableAutoRange(axis='x')
         else:
             self.plot_item.disableAutoRange(axis='x')
             val_str = text.replace('s', '').replace('m', ''); val = float(val_str)
             if 'm' in text: val /= 1000.0
             self.plot_item.setXRange(-val, 0, padding=0)
-
     def auto_scale(self): self.plot_item.enableAutoRange(axis='y')
     def request_pop_out(self): self.pop_out_req.emit(self.channel_id)
-
     def update_data(self, t_axis, data_array, target_val):
-        self.raw_t = t_axis
-        self.raw_data = data_array
-        self.target_line.setPos(target_val)
-        self.refresh_view()
-
+        self.raw_t = t_axis; self.raw_data = data_array; self.target_line.setPos(target_val); self.refresh_view()
     def refresh_view(self):
         if self.raw_t is None or self.raw_data is None: return
-
-        view = self.plot_item.viewRange()[0]
-        x_min, x_max = view
-        
-        idx_start = np.searchsorted(self.raw_t, x_min)
-        idx_end = np.searchsorted(self.raw_t, x_max)
-        
+        view = self.plot_item.viewRange()[0]; x_min, x_max = view
+        idx_start = np.searchsorted(self.raw_t, x_min); idx_end = np.searchsorted(self.raw_t, x_max)
         if idx_start > 0: idx_start -= 1
         if idx_end < len(self.raw_t): idx_end += 1
-        
         if idx_end <= idx_start: return
-
-        # Direct View Slice
-        t_view = self.raw_t[idx_start:idx_end]
-        data_view = self.raw_data[idx_start:idx_end]
-        
-        # Direct Decimation (Manual Skip for speed)
-        points_in_view = len(data_view)
+        t_view = self.raw_t[idx_start:idx_end]; data_view = self.raw_data[idx_start:idx_end]
         TARGET_POINTS = 3000 
-        
-        if points_in_view > TARGET_POINTS:
-            step = points_in_view // TARGET_POINTS
+        if len(data_view) > TARGET_POINTS:
+            step = len(data_view) // TARGET_POINTS
             if step < 1: step = 1
             self.curve.setData(t_view[::step], data_view[::step])
-        else:
-            self.curve.setData(t_view, data_view)
+        else: self.curve.setData(t_view, data_view)
 
 # =============================================================================
 # 6. 主程序
@@ -325,8 +272,8 @@ class SmartPlotWidget(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # 稳健的无边框设置
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(1400, 950)
         
         self.fs = 1000.0; self.max_history = 5.0 
@@ -339,6 +286,15 @@ class MainWindow(QMainWindow):
         self.refresh_ports()
         self.timer = QTimer(); self.timer.timeout.connect(self.on_timer_tick); self.timer.start(30) 
 
+    # 强制背景重绘，防止黑屏
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor("#121212")) 
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
+
     def reset_buffers(self):
         self.buffer_len = int(self.fs * self.max_history)
         self.data_buffer = np.zeros((6, self.buffer_len), dtype=np.float32)
@@ -347,156 +303,155 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         root_widget = QFrame()
-        root_widget.setStyleSheet("QFrame#Root { background-color: #121212; border: 1px solid #444; border-radius: 8px; }")
         root_widget.setObjectName("Root")
+        root_widget.setStyleSheet("QFrame#Root { background-color: #121212; border: 1px solid #444; border-radius: 8px; }")
         self.setCentralWidget(root_widget)
+        
         root_layout = QVBoxLayout(root_widget); root_layout.setContentsMargins(0, 0, 0, 0); root_layout.setSpacing(0)
-        self.title_bar = CustomTitleBar(self, title="JustFloat Oscilloscope Pro v6.3 (Protocol Fixed)")
+        self.title_bar = CustomTitleBar(self, title="JustFloat Oscilloscope Pro v6.3 (Tabbed)")
         root_layout.addWidget(self.title_bar)
 
-        content_widget = QWidget()
-        main_layout = QHBoxLayout(content_widget); main_layout.setContentsMargins(15, 15, 15, 15)
+        content_widget = QWidget(); main_layout = QHBoxLayout(content_widget); main_layout.setContentsMargins(15, 15, 15, 15)
 
-        # === 左侧面板 ===
-        left_panel = QWidget(); left_layout = QVBoxLayout(left_panel); left_layout.setSpacing(15)
+        # === 左侧 Tab 面板 ===
+        left_panel = QWidget(); left_layout = QVBoxLayout(left_panel); left_layout.setContentsMargins(0,0,0,0)
         
-        # 1. 顶部连接设置
-        settings_card = QFrame(); settings_card.setStyleSheet("QFrame { background-color: #2b2b2b; border-radius: 10px; border: 1px solid #3d3d3d; }")
-        sl = QVBoxLayout(settings_card); sl.setContentsMargins(15, 15, 15, 15); sl.setSpacing(10)
-        sl.addWidget(QLabel("DEVICE CONNECTION", styleSheet="color: #888; font-weight: bold; font-size: 10px; border:none;"))
-
+        self.tabs = QTabWidget()
+        # 核心：滚动条美化 + Tab样式
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #3d3d3d; border-radius: 6px; background: #2b2b2b; }
+            QTabBar::tab { background: #2b2b2b; color: #888; padding: 8px 15px; border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px; }
+            QTabBar::tab:selected { background: #3d3d3d; color: #00E5FF; font-weight: bold; border-bottom: 2px solid #00E5FF; }
+            QTabBar::tab:hover { color: #fff; background: #333; }
+            
+            QScrollBar:vertical { border: none; background: #2b2b2b; width: 10px; margin: 0px; border-radius: 5px; }
+            QScrollBar::handle:vertical { background: #555; min-height: 20px; border-radius: 5px; }
+            QScrollBar::handle:vertical:hover { background: #777; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+        
+        # --- TAB 1: CONTROLS ---
+        tab_ctrl = QWidget(); tc_layout = QVBoxLayout(tab_ctrl); tc_layout.setSpacing(10); tc_layout.setContentsMargins(8, 8, 8, 8)
+        
+        settings_card = QFrame(); settings_card.setStyleSheet("background-color: #1e1e1e; border-radius: 8px; border: 1px solid #444;")
+        sl = QVBoxLayout(settings_card); sl.setSpacing(8)
+        
         h_port = QHBoxLayout()
-        self.combo_port = QComboBox(); self.combo_port.setFixedHeight(30)
-        self.combo_port.setStyleSheet("background: #1e1e1e; color: white; padding: 5px; border-radius: 5px; border: 1px solid #444;")
-        btn_refresh = QPushButton("↻"); btn_refresh.setFixedSize(30, 30); btn_refresh.clicked.connect(self.refresh_ports)
-        btn_refresh.setStyleSheet("QPushButton { color: #00E5FF; background: #333; border: 1px solid #444; border-radius: 5px; } QPushButton:hover{background:#444;}")
-        h_port.addWidget(self.combo_port); h_port.addWidget(btn_refresh); sl.addLayout(h_port)
+        self.combo_port = QComboBox(); btn_refresh = QPushButton("↻"); btn_refresh.clicked.connect(self.refresh_ports)
+        self.combo_port.setStyleSheet("background:#2b2b2b; color:white; padding:4px;"); btn_refresh.setStyleSheet("background:#333; color:#00E5FF; border:1px solid #555;")
+        h_port.addWidget(self.combo_port); h_port.addWidget(btn_refresh)
         
-        h_baud = QHBoxLayout(); h_baud.addWidget(QLabel("Baud:", styleSheet="color: #aaa; border:none;"))
-        self.combo_baud = QComboBox(); self.combo_baud.addItems(["9600", "115200", "256000", "921600", "2000000"]); self.combo_baud.setCurrentText("115200"); self.combo_baud.setFixedHeight(30)
-        self.combo_baud.setStyleSheet("background: #1e1e1e; color: white; padding: 5px; border-radius: 5px; border: 1px solid #444;"); h_baud.addWidget(self.combo_baud); sl.addLayout(h_baud)
+        self.combo_baud = QComboBox(); self.combo_baud.addItems(["9600","115200","921600","2000000"]); self.combo_baud.setCurrentText("115200")
+        self.combo_baud.setStyleSheet("background:#2b2b2b; color:white; padding:4px;")
+        self.btn_connect = QPushButton("CONNECT"); self.btn_connect.clicked.connect(self.toggle_connection); self.btn_connect.setFixedHeight(35)
+        self.btn_connect.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border-radius: 4px;")
         
-        self.btn_connect = QPushButton("CONNECT"); self.btn_connect.setFixedHeight(40); self.btn_connect.setCursor(Qt.PointingHandCursor); self.btn_connect.clicked.connect(self.toggle_connection)
-        self.btn_connect.setStyleSheet("QPushButton { background-color: #2e7d32; color: white; border-radius: 5px; font-weight: bold; border:none; } QPushButton:hover { background-color: #388e3c; }"); sl.addWidget(self.btn_connect)
+        h_buf = QHBoxLayout(); self.spin_history = QSpinBox(); self.spin_history.setRange(1, 600); self.spin_history.setValue(int(self.max_history)); self.spin_history.valueChanged.connect(self.on_buffer_size_change)
+        self.spin_history.setStyleSheet("background:#2b2b2b; color:white;"); h_buf.addWidget(QLabel("History(s):", styleSheet="color:#ccc; border:none;")); h_buf.addWidget(self.spin_history)
         
-        line = QFrame(); line.setFrameShape(QFrame.HLine); line.setFrameShadow(QFrame.Sunken); line.setStyleSheet("background: #3d3d3d; border:none; max-height: 1px;"); sl.addWidget(line)
-        self.btn_test_mode = QPushButton("TEST MODE: OFF"); self.btn_test_mode.setCheckable(True); self.btn_test_mode.setFixedHeight(35); self.btn_test_mode.setCursor(Qt.PointingHandCursor); self.btn_test_mode.clicked.connect(self.toggle_test_mode)
-        self.btn_test_mode.setStyleSheet("QPushButton { background-color: #333; color: #888; border: 1px solid #555; border-radius: 5px; } QPushButton:checked { background-color: #e65100; color: white; border: 1px solid #ef6c00; }"); sl.addWidget(self.btn_test_mode)
+        h_global = QHBoxLayout(); self.btn_pause = QPushButton("PAUSE"); self.btn_pause.clicked.connect(self.toggle_pause)
+        self.btn_pause.setStyleSheet("background:#444; color:white; border-radius:4px;")
+        btn_clear = QPushButton("CLEAR"); btn_clear.clicked.connect(self.clear_buffer)
+        btn_clear.setStyleSheet("background:#c62828; color:white; border-radius:4px;")
+        h_global.addWidget(self.btn_pause); h_global.addWidget(btn_clear)
         
-        sl.addSpacing(5); sl.addWidget(QLabel("DATA BUFFER", styleSheet="color: #888; font-weight: bold; font-size: 10px; border:none;"))
-        h_buf = QHBoxLayout(); h_buf.addWidget(QLabel("History (s):", styleSheet="color:#ccc; border:none;"))
-        self.spin_history = QSpinBox(); self.spin_history.setRange(1, 300); self.spin_history.setValue(int(self.max_history)); self.spin_history.setSuffix(" s"); self.spin_history.setFixedHeight(30)
-        self.spin_history.setStyleSheet("QSpinBox { background: #1e1e1e; color: white; padding: 5px; border-radius: 5px; border: 1px solid #444; }"); self.spin_history.valueChanged.connect(self.on_buffer_size_change); h_buf.addWidget(self.spin_history); sl.addLayout(h_buf)
+        sl.addLayout(h_port); sl.addWidget(self.combo_baud); sl.addWidget(self.btn_connect); sl.addLayout(h_buf); sl.addLayout(h_global)
+        tc_layout.addWidget(settings_card)
         
-        h_global = QHBoxLayout()
-        self.btn_pause = QPushButton("PAUSE"); self.btn_pause.setFixedHeight(30); self.btn_pause.setCursor(Qt.PointingHandCursor); self.btn_pause.clicked.connect(self.toggle_pause)
-        self.btn_pause.setStyleSheet("QPushButton { background-color: #444; color: #ddd; border-radius: 5px; font-weight: bold; border:none; } QPushButton:hover { background-color: #555; }")
-        btn_clear = QPushButton("CLEAR"); btn_clear.setFixedHeight(30); btn_clear.setCursor(Qt.PointingHandCursor); btn_clear.clicked.connect(self.clear_buffer)
-        btn_clear.setStyleSheet("QPushButton { background-color: #c62828; color: white; border-radius: 5px; font-weight: bold; border:none; } QPushButton:hover { background-color: #d32f2f; }")
-        h_global.addWidget(self.btn_pause); h_global.addWidget(btn_clear); sl.addLayout(h_global)
+        self.btn_test_mode = QPushButton("TEST MODE: OFF"); self.btn_test_mode.setCheckable(True); self.btn_test_mode.clicked.connect(self.toggle_test_mode)
+        self.btn_test_mode.setStyleSheet("background:#333; color:#aaa; border:1px solid #555; border-radius:4px; padding:4px;")
+        tc_layout.addWidget(self.btn_test_mode)
         
-        left_layout.addWidget(settings_card)
-
-        # 2. LOG 区域
-        log_group = QGroupBox("LOG"); log_group.setStyleSheet("QGroupBox{color: #888; font-weight:bold; border: 1px solid #3d3d3d; border-radius: 6px; margin-top:6px;} QGroupBox::title{subcontrol-origin: margin; left: 10px; padding: 0 3px;}")
-        log_layout = QVBoxLayout(log_group); log_layout.setContentsMargins(5, 10, 5, 5)
-        self.log_view = QTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet("background: #1e1e1e; color: #ccc; border: none; font-family: Consolas; font-size: 11px;")
-        log_layout.addWidget(self.log_view)
-        left_layout.addWidget(log_group, stretch=1) 
-
-        left_layout.addWidget(QLabel("  CHANNELS")); self.ctrl_widgets = []
+        self.ctrl_widgets = []
         for i in range(6):
-            card = self.create_control_card(i); left_layout.addWidget(card); self.ctrl_widgets.append(card)
-        
-        # Right Plot
-        self.plot_container = QWidget(); self.grid_layout = QGridLayout(self.plot_container)
-        self.grid_layout.setSpacing(12); self.grid_layout.setContentsMargins(0,0,0,0)
-        self.grid_layout.setRowStretch(0, 1); self.grid_layout.setRowStretch(1, 1)
-        self.grid_layout.setColumnStretch(0, 1); self.grid_layout.setColumnStretch(1, 1); self.grid_layout.setColumnStretch(2, 1)
+            card = self.create_control_card(i); tc_layout.addWidget(card); self.ctrl_widgets.append(card)
+        tc_layout.addStretch()
 
+        # --- TAB 2: SYSTEM LOG ---
+        tab_log = QWidget(); tl = QVBoxLayout(tab_log); tl.setContentsMargins(5,5,5,5)
+        self.log_view = QTextEdit(); self.log_view.setReadOnly(True)
+        self.log_view.setStyleSheet("background: #121212; color: #00FF00; font-family: Consolas; font-size: 11px; border:none;")
+        tl.addWidget(self.log_view)
+
+        self.tabs.addTab(tab_ctrl, "CONTROL")
+        self.tabs.addTab(tab_log, "SYSTEM LOG")
+        left_layout.addWidget(self.tabs)
+
+        # Right Grid
+        self.plot_container = QWidget(); self.grid_layout = QGridLayout(self.plot_container); self.grid_layout.setSpacing(10); self.grid_layout.setContentsMargins(0,0,0,0)
         self.plot_widgets = {}; self.placeholders = {}; self.detached_windows = {}
         for i in range(6):
             p_widget = SmartPlotWidget(i+1, self.colors[i])
             p_widget.pop_out_req.connect(self.handle_pop_out)
             self.plot_widgets[i+1] = p_widget; row, col = divmod(i, 3); self.grid_layout.addWidget(p_widget, row, col)
 
-        splitter = QSplitter(Qt.Horizontal); splitter.addWidget(left_panel); splitter.addWidget(self.plot_container); splitter.setSizes([320, 1080]); splitter.setHandleWidth(2); splitter.setStyleSheet("QSplitter::handle { background-color: #333; }")
+        splitter = QSplitter(Qt.Horizontal); splitter.addWidget(left_panel); splitter.addWidget(self.plot_container); splitter.setSizes([340, 1060]); splitter.setHandleWidth(2)
+        splitter.setStyleSheet("QSplitter::handle { background-color: #333; }")
         main_layout.addWidget(splitter); root_layout.addWidget(content_widget)
-        self.grip = QSizeGrip(self); self.grip.setStyleSheet("background: transparent; width: 20px; height: 20px;")
+        self.grip = QSizeGrip(self); self.grip.setFixedSize(20, 20)
     
     def resizeEvent(self, event):
         self.grip.move(self.rect().right() - 20, self.rect().bottom() - 20); super().resizeEvent(event)
 
     def create_control_card(self, idx):
-        frame = QFrame(); frame.setStyleSheet(f"background: #2b2b2b; border-radius: 8px; border-left: 4px solid {self.colors[idx]};")
-        l = QVBoxLayout(frame); l.setContentsMargins(12, 10, 12, 10)
-        h1 = QHBoxLayout(); title = QLabel(f"CH {idx+1}", styleSheet="color: #ddd; font-weight: bold; font-size: 11pt;")
-        toggle = AnimatedToggle(active_color=self.colors[idx]); 
-        if idx == 0: toggle._checked = True; toggle._handle_position = 28
-        h1.addWidget(title); h1.addStretch(); h1.addWidget(toggle)
-        h2 = QHBoxLayout(); spin = QDoubleSpinBox(); spin.setRange(-99999.0, 99999.0); spin.setDecimals(2); spin.setValue(0.00); spin.setSuffix(" U")
-        spin.setFixedWidth(85); spin.setStyleSheet(f"background: #1e1e1e; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px;")
-        val_lbl = QLabel("     0.00"); val_lbl.setFixedWidth(110); val_lbl.setStyleSheet(f"color: {self.colors[idx]}; font-family: 'Consolas', monospace; font-weight: bold; font-size: 16px;"); val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        h2.addWidget(QLabel("Ref:", styleSheet="color:#aaa")); h2.addWidget(spin); h2.addStretch(); h2.addWidget(val_lbl)
-        l.addLayout(h1); l.addLayout(h2)
-        frame.toggle = toggle; frame.spin = spin; frame.val_lbl = val_lbl
+        frame = QFrame(); frame.setStyleSheet(f"background: #1e1e1e; border-radius: 6px; border-left: 4px solid {self.colors[idx]};")
+        l = QVBoxLayout(frame); l.setContentsMargins(10, 6, 10, 6); l.setSpacing(4)
+        h1 = QHBoxLayout(); title = QLabel(f"CH {idx+1}", styleSheet="color: #ddd; font-weight: bold;")
+        toggle = AnimatedToggle(active_color=self.colors[idx]); h1.addWidget(title); h1.addStretch(); h1.addWidget(toggle)
+        h2 = QHBoxLayout(); spin = QDoubleSpinBox(); spin.setRange(-99999, 99999); spin.setValue(0); spin.setFixedWidth(80)
+        spin.setStyleSheet("background:#2b2b2b; color:white; border:1px solid #444; padding:2px;")
+        val_lbl = QLabel("0.00"); val_lbl.setFixedWidth(80); val_lbl.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
+        val_lbl.setStyleSheet(f"color: {self.colors[idx]}; font-family: Consolas; font-weight: bold; font-size: 14px;")
+        h2.addWidget(QLabel("Ref:", styleSheet="border:none; color:#aaa")); h2.addWidget(spin); h2.addStretch(); h2.addWidget(val_lbl)
+        l.addLayout(h1); l.addLayout(h2); frame.toggle = toggle; frame.spin = spin; frame.val_lbl = val_lbl
         
-        # --- 核心修正：绑定发送事件 ---
+        # 绑定发送事件 (V6.3 格式)
         spin.editingFinished.connect(lambda: self.send_target_value(idx))
-        
         return frame
 
-    # --- 核心修正：发送逻辑 ---
     def send_target_value(self, idx):
-        """发送目标值：格式 #Value,valveID#"""
         if self.serial_thread and self.serial_thread.isRunning():
             val = self.ctrl_widgets[idx].spin.value()
-            # 协议：#<目标值>,valve<通道号>#
+            # 格式: #50.00,valve1#
             cmd = f"#{val:.2f},valve{idx+1}#"
             self.serial_thread.send_command(cmd)
         else:
-            self.append_log("Error: Serial disconnected", "#FF0000")
+            self.append_log("Warning: Not Connected", "#FFA500")
 
     def append_log(self, text, color="#CCCCCC"):
-        self.log_view.append(f'<font color="{color}">{text}</font>')
-        sb = self.log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    # ------------------
+        t_str = datetime.now().strftime("[%H:%M:%S] ")
+        self.log_view.append(f'<font color="#555">{t_str}</font><font color="{color}">{text}</font>')
+        sb = self.log_view.verticalScrollBar(); sb.setValue(sb.maximum())
 
     def toggle_pause(self):
         self.is_paused = not self.is_paused
-        if self.is_paused:
-            self.btn_pause.setText("RESUME"); self.btn_pause.setStyleSheet("QPushButton { background-color: #2e7d32; color: white; border-radius: 5px; font-weight: bold; border:none; } QPushButton:hover { background-color: #388e3c; }")
-        else:
-            self.btn_pause.setText("PAUSE"); self.btn_pause.setStyleSheet("QPushButton { background-color: #444; color: #ddd; border-radius: 5px; font-weight: bold; border:none; } QPushButton:hover { background-color: #555; }")
+        self.btn_pause.setText("RESUME" if self.is_paused else "PAUSE")
+        self.btn_pause.setStyleSheet(f"background:{'#2e7d32' if self.is_paused else '#444'}; color:white; border-radius:4px;")
 
     def clear_buffer(self):
         self.data_buffer.fill(0)
         for i in range(6):
             target = self.ctrl_widgets[i].spin.value()
             self.plot_widgets[i+1].update_data(self.t_axis, self.data_buffer[i], target)
-            self.ctrl_widgets[i].val_lbl.setText("     0.00")
+            self.ctrl_widgets[i].val_lbl.setText("0.00")
         self.append_log("Buffer Cleared", "#888888")
 
     def on_buffer_size_change(self, val):
         self.max_history = float(val); self.reset_buffers()
-        for i in range(1, 7): self.plot_widgets[i].update_data(self.t_axis, self.data_buffer[i-1], 0)
     def refresh_ports(self):
-        self.combo_port.clear(); 
+        self.combo_port.clear()
         for p in serial.tools.list_ports.comports(): self.combo_port.addItem(p.device)
     def toggle_test_mode(self):
         self.is_test_mode = self.btn_test_mode.isChecked()
         self.btn_test_mode.setText("TEST MODE: ON" if self.is_test_mode else "TEST MODE: OFF")
+        self.btn_test_mode.setStyleSheet(f"background:{'#e65100' if self.is_test_mode else '#333'}; color:{'white' if self.is_test_mode else '#aaa'}; border:1px solid #555; border-radius:4px;")
         if not self.is_test_mode: self.reset_buffers()
         self.append_log(f"Test Mode: {self.is_test_mode}", "#FFA500")
 
     def toggle_connection(self):
         if self.serial_thread:
             self.serial_thread.stop(); self.serial_thread = None
-            self.btn_connect.setText("CONNECT"); self.btn_connect.setStyleSheet("background-color: #2e7d32; color: white; border-radius: 5px; font-weight: bold; border:none;")
+            self.btn_connect.setText("CONNECT"); self.btn_connect.setStyleSheet("background-color: #2e7d32; color: white; font-weight:bold; border-radius:4px;")
             self.combo_port.setEnabled(True); self.combo_baud.setEnabled(True)
             self.append_log("Disconnected", "#FF0000")
         else:
@@ -505,27 +460,31 @@ class MainWindow(QMainWindow):
             self.serial_thread.data_received.connect(self.on_serial_data)
             self.serial_thread.log_message.connect(self.append_log) 
             self.serial_thread.start()
-            self.btn_connect.setText("DISCONNECT"); self.btn_connect.setStyleSheet("background-color: #c62828; color: white; border-radius: 5px; font-weight: bold; border:none;")
+            self.btn_connect.setText("DISCONNECT"); self.btn_connect.setStyleSheet("background-color: #c62828; color: white; font-weight:bold; border-radius:4px;")
             self.combo_port.setEnabled(False); self.combo_baud.setEnabled(False)
     
     @Slot(list)
     def on_serial_data(self, data):
         if not self.is_test_mode:
-            new_values = [0.0] * 6
-            for i in range(min(len(data), 6)): new_values[i] = data[i]
-            self.latest_serial_data = new_values
+            new_vals = [0.0] * 6
+            for i in range(min(len(data), 6)): new_vals[i] = data[i]
+            self.latest_serial_data = new_vals
+
     def handle_pop_out(self, channel_id):
-        widget = self.plot_widgets[channel_id]; idx = self.grid_layout.indexOf(widget); row, col, r_span, c_span = self.grid_layout.getItemPosition(idx)
+        widget = self.plot_widgets[channel_id]; idx = self.grid_layout.indexOf(widget)
+        row, col, rs, cs = self.grid_layout.getItemPosition(idx)
         self.grid_layout.removeWidget(widget); placeholder = PlaceholderWidget(channel_id)
-        self.grid_layout.addWidget(placeholder, row, col, r_span, c_span); self.placeholders[channel_id] = placeholder
+        self.grid_layout.addWidget(placeholder, row, col, rs, cs); self.placeholders[channel_id] = placeholder
         dialog = DetachedWindow(channel_id, widget, self); dialog.window_closed.connect(self.handle_redock); dialog.show()
         widget.btn_pop.setText("↙"); widget.btn_pop.clicked.disconnect(); widget.btn_pop.clicked.connect(dialog.close)
+
     def handle_redock(self, channel_id):
         widget = self.plot_widgets[channel_id]
         if channel_id in self.placeholders:
-            placeholder = self.placeholders[channel_id]; idx = self.grid_layout.indexOf(placeholder); row, col, r_span, c_span = self.grid_layout.getItemPosition(idx)
+            placeholder = self.placeholders[channel_id]; idx = self.grid_layout.indexOf(placeholder)
+            row, col, rs, cs = self.grid_layout.getItemPosition(idx)
             self.grid_layout.removeWidget(placeholder); placeholder.deleteLater(); del self.placeholders[channel_id]
-            self.grid_layout.addWidget(widget, row, col, r_span, c_span)
+            self.grid_layout.addWidget(widget, row, col, rs, cs)
         if channel_id in self.detached_windows: del self.detached_windows[channel_id]
         widget.btn_pop.setText("↗"); widget.btn_pop.clicked.disconnect(); widget.btn_pop.clicked.connect(widget.request_pop_out)
     
@@ -539,10 +498,7 @@ class MainWindow(QMainWindow):
             if ctrl.toggle.isChecked():
                 if self.is_test_mode:
                     noise = np.random.normal(0, 2, chunk_size).astype(np.float32)
-                    if i == 0: wave = 50 * np.sin(2 * np.pi * 1 * t_chunk)
-                    elif i == 1: wave = 30 * np.sin(2 * np.pi * 10 * t_chunk)
-                    elif i == 2: wave = 40 * np.sign(np.sin(2 * np.pi * 2 * t_chunk))
-                    else: wave = 20 * np.sin(2 * np.pi * (0.5 + i*0.2) * t_chunk)
+                    wave = 50 * np.sin(2 * np.pi * (1+i*0.2) * t_chunk)
                     new_data = target + wave + noise; current_val = new_data[-1]
                 else:
                     val = self.latest_serial_data[i]; new_data = np.full(chunk_size, val, dtype=np.float32); current_val = val
@@ -552,7 +508,6 @@ class MainWindow(QMainWindow):
             self.plot_widgets[i+1].update_data(self.t_axis, self.data_buffer[i], target)
 
 if __name__ == "__main__":
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling); QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
