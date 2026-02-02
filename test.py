@@ -27,7 +27,7 @@ pg.setConfigOptions(antialias=False)
 pg.setConfigOption('useOpenGL', False) 
 
 # =============================================================================
-# 2. UI 组件 (LED, 标题栏, 开关)
+# 2. UI 组件
 # =============================================================================
 class LedIndicator(QWidget):
     def __init__(self, color="#00FF00", parent=None):
@@ -87,11 +87,13 @@ class AnimatedToggle(QWidget):
         self._active_color = QColor(active_color); self._bg_color = QColor("#424242")
         self.animation = QPropertyAnimation(self, b"handle_position", self)
         self.animation.setEasingCurve(QEasingCurve.InOutCubic); self.animation.setDuration(200)
+    
     @Property(float)
     def handle_position(self): return self._handle_position
     @handle_position.setter
     def handle_position(self, pos): self._handle_position = pos; self.update()
     def isChecked(self): return self._checked
+    
     def mouseReleaseEvent(self, e):
         self._checked = not self._checked
         self.animation.setEndValue(self.width() - 25 if self._checked else 3); self.animation.start()
@@ -103,7 +105,7 @@ class AnimatedToggle(QWidget):
         p.setBrush(QColor("#FFF")); p.drawEllipse(QPoint(int(self._handle_position) + 11, 14), 11, 11)
 
 # =============================================================================
-# 3. 协议配置窗口 (支持多线显示配置)
+# 3. 协议配置窗口
 # =============================================================================
 class ProtocolConfigDialog(QDialog):
     def __init__(self, current_config, parent=None):
@@ -115,7 +117,6 @@ class ProtocolConfigDialog(QDialog):
         self.config = current_config
         layout = QVBoxLayout(self)
 
-        # 1. 设置总长度
         h_total = QHBoxLayout()
         h_total.addWidget(QLabel("Total Floats in Packet (N):"))
         self.spin_total = QSpinBox()
@@ -126,47 +127,35 @@ class ProtocolConfigDialog(QDialog):
         layout.addLayout(h_total)
 
         layout.addWidget(QLabel("Channel Mapping:", styleSheet="color: #aaa; margin-top: 10px; font-weight: bold;"))
-        layout.addWidget(QLabel("Enter indices separated by comma (e.g., '0,1').\nAll mapped indices will be plotted on the same chart.", styleSheet="color: #777; font-size: 11px; margin-bottom: 5px;"))
+        layout.addWidget(QLabel("Enter indices separated by comma (e.g., '0,1').", styleSheet="color: #777; font-size: 11px; margin-bottom: 5px;"))
 
-        # 2. 设置每个通道的映射
         self.line_edits = []
         grid = QGridLayout()
         colors = ['#FF5252', '#448AFF', '#69F0AE', '#E040FB', '#FFD740', '#00E5FF']
-        
         for i in range(6):
             lbl = QLabel(f"CH {i+1}:")
             lbl.setStyleSheet(f"color: {colors[i]}; font-weight: bold;")
             le = QLineEdit()
-            # 还原当前配置
             current_indices = self.config.get('mappings', {})[i]
             le.setText(",".join(map(str, current_indices)))
             le.setStyleSheet("background: #2b2b2b; color: white; border: 1px solid #444; padding: 3px;")
             self.line_edits.append(le)
-            grid.addWidget(lbl, i, 0)
-            grid.addWidget(le, i, 1)
-        
+            grid.addWidget(lbl, i, 0); grid.addWidget(le, i, 1)
         layout.addLayout(grid)
 
-        # 3. 快捷生成工具
         gb_tools = QGroupBox("Presets")
         gb_tools.setStyleSheet("QGroupBox { border: 1px solid #444; margin-top: 10px; padding-top: 10px; font-weight: bold; }")
         hl_tools = QVBoxLayout(gb_tools)
-        
-        # 预设：每3个一组，显示前2个
         btn_grp3 = QPushButton("Groups of 3 (Show 1st & 2nd)")
-        btn_grp3.setToolTip("Sets Total=18. CH1 shows indices 0 & 1, CH2 shows 3 & 4...")
         btn_grp3.setStyleSheet("background: #444; color: white; border: none; padding: 6px; text-align: left; padding-left: 10px;")
         btn_grp3.clicked.connect(self.apply_group_preset)
         hl_tools.addWidget(btn_grp3)
-
         btn_reset = QPushButton("Reset: 1-to-1 Mapping")
         btn_reset.setStyleSheet("background: #444; color: #aaa; border: none; padding: 6px; text-align: left; padding-left: 10px;")
         btn_reset.clicked.connect(self.apply_reset_preset)
         hl_tools.addWidget(btn_reset)
-
         layout.addWidget(gb_tools)
 
-        # 按钮
         layout.addStretch()
         btn_box = QHBoxLayout()
         btn_cancel = QPushButton("Cancel"); btn_cancel.clicked.connect(self.reject)
@@ -177,12 +166,8 @@ class ProtocolConfigDialog(QDialog):
         layout.addLayout(btn_box)
 
     def apply_group_preset(self):
-        # 需求：每3个一组，取前两个一起显示
-        group_size = 3
-        take_count = 2
-        total_needed = group_size * 6
+        group_size = 3; take_count = 2; total_needed = group_size * 6
         self.spin_total.setValue(total_needed)
-        
         for i in range(6):
             start_idx = i * group_size
             indices = [str(start_idx + k) for k in range(take_count)]
@@ -190,54 +175,40 @@ class ProtocolConfigDialog(QDialog):
 
     def apply_reset_preset(self):
         self.spin_total.setValue(6)
-        for i in range(6):
-            self.line_edits[i].setText(str(i))
+        for i in range(6): self.line_edits[i].setText(str(i))
 
     def get_data(self):
         mappings = []
         for le in self.line_edits:
             txt = le.text().strip()
-            if not txt:
-                mappings.append([0]) 
-            else:
-                try:
-                    idx_list = [int(x) for x in txt.split(',') if x.strip().isdigit()]
-                    mappings.append(idx_list if idx_list else [0])
-                except:
-                    mappings.append([0])
-        return {
-            'total_floats': self.spin_total.value(),
-            'mappings': mappings
-        }
+            try:
+                idx_list = [int(x) for x in txt.split(',') if x.strip().isdigit()]
+                mappings.append(idx_list if idx_list else [0])
+            except: mappings.append([0])
+        return {'total_floats': self.spin_total.value(), 'mappings': mappings}
 
 # =============================================================================
-# 4. 串口逻辑 (支持动态长度)
+# 4. 串口逻辑
 # =============================================================================
 class SerialWorker(QThread):
     data_received = Signal(list)      
     log_message = Signal(str, str)    
     tx_flash = Signal()               
     rx_flash = Signal()               
-    ack_received = Signal(int, bool)
+    ack_received = Signal(int, bool, str) # Channel, Success, Type
     
     def __init__(self, port_name, baud_rate, num_floats=6):
         super().__init__()
-        self.port_name = port_name
-        self.baud_rate = baud_rate
-        self.num_floats = num_floats
+        self.port_name = port_name; self.baud_rate = baud_rate; self.num_floats = num_floats
         self.update_frame_settings()
-        
         self.is_running = True; self.ser = None
-        self.pending_cmd = None; self.pending_channel = -1; self.last_send_time = 0
-        self.retry_count = 0; self.MAX_RETRIES = 20; self.RETRY_INTERVAL = 0.2 
+        self.pending_cmd = None; self.pending_channel = -1; self.pending_cmd_type = "value"
+        self.last_send_time = 0; self.retry_count = 0; self.MAX_RETRIES = 20; self.RETRY_INTERVAL = 0.2 
 
     def update_frame_settings(self):
-        self.frame_len = self.num_floats * 4 
-        self.unpack_fmt = f'<{self.num_floats}f'
-
+        self.frame_len = self.num_floats * 4; self.unpack_fmt = f'<{self.num_floats}f'
     def set_num_floats(self, n):
-        self.num_floats = n
-        self.update_frame_settings()
+        self.num_floats = n; self.update_frame_settings()
 
     def run(self):
         try:
@@ -258,7 +229,9 @@ class SerialWorker(QThread):
                             self.retry_count += 1; self.tx_flash.emit() 
                         except: pass
                     else:
-                        self.ack_received.emit(self.pending_channel, False); self.pending_cmd = None
+                        self.log_message.emit("Cmd Timeout", "#FF0000")
+                        self.ack_received.emit(self.pending_channel, False, self.pending_cmd_type)
+                        self.pending_cmd = None
             
             try:
                 if self.ser.in_waiting:
@@ -269,18 +242,17 @@ class SerialWorker(QThread):
                         self.log_message.emit("Rx: Success", "#00FF00")
                         buffer = buffer.replace(b'Success', b'') 
                         if self.pending_cmd:
-                            self.pending_cmd = None; self.ack_received.emit(self.pending_channel, True)
+                            self.ack_received.emit(self.pending_channel, True, self.pending_cmd_type)
+                            self.pending_cmd = None
 
                     while len(buffer) >= 8: 
                         tail_idx = buffer.find(TAIL)
                         if tail_idx == -1:
                             if len(buffer) > 200: buffer = buffer[-50:]
                             break
-                        
                         pre_tail_len = tail_idx
                         valid_len = min(pre_tail_len, self.frame_len)
                         valid_len -= (valid_len % 4)
-                        
                         if valid_len > 0:
                             start_pos = tail_idx - valid_len
                             if start_pos >= 0:
@@ -295,18 +267,30 @@ class SerialWorker(QThread):
             self.msleep(5) 
         if self.ser: self.ser.close()
 
-    def send_command_reliable(self, cmd_str, channel_id):
+    def send_command_reliable(self, cmd_str, channel_id, cmd_type="value"):
         if self.ser and self.ser.is_open:
+            # --- [修复 Bug 核心] ---
+            # 如果当前已经有一个指令在排队（例如正在设置Ref），新指令（例如开关）来了
+            # 我们必须先“取消”上一个指令，通知界面把上一个控件解锁
+            if self.pending_cmd is not None:
+                self.log_message.emit("Busy: Overwrite Prev Cmd", "#FFA500")
+                # 强制发送一个失败信号给上一个挂起的指令，让UI去解锁那个控件
+                self.ack_received.emit(self.pending_channel, False, self.pending_cmd_type)
+
+            # --- 继续处理新指令 ---
             self.log_message.emit(f"TX >> {cmd_str}", "#448AFF") 
-            self.pending_cmd = cmd_str.encode('utf-8'); self.pending_channel = channel_id
-            self.retry_count = 0; self.last_send_time = 0 
+            self.pending_cmd = cmd_str.encode('utf-8')
+            self.pending_channel = channel_id
+            self.pending_cmd_type = cmd_type # 更新为当前指令类型
+            self.retry_count = 0
+            self.last_send_time = 0 
         else: 
-            self.ack_received.emit(channel_id, False)
+            self.ack_received.emit(channel_id, False, cmd_type)
     
     def stop(self): self.is_running = False; self.wait()
 
 # =============================================================================
-# 5. 绘图与窗口组件 (SmartPlotWidget - Multi-Curve Support)
+# 5. 绘图与窗口组件
 # =============================================================================
 class PlaceholderWidget(QFrame):
     def __init__(self, channel_id, parent=None):
@@ -361,10 +345,7 @@ class SmartPlotWidget(QFrame):
         h_layout.addStretch(); h_layout.addWidget(btn_auto); h_layout.addWidget(self.btn_pop)
         self.plot_item = pg.PlotWidget(); self.plot_item.setBackground('#1e1e1e'); self.plot_item.showGrid(x=True, y=True, alpha=0.2); self.plot_item.setMouseEnabled(x=True, y=True); self.plot_item.hideButtons()
         self.plot_item.setClipToView(True); self.plot_item.setDownsampling(auto=False); self.plot_item.getPlotItem().layout.setContentsMargins(0, 5, 0, 0)
-        
-        # [修改] 不再只有 self.curve, 而是 self.curves 列表
         self.curves = [] 
-        
         self.target_line = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(color='#FFFFFF', style=Qt.DashLine, width=1, alpha=80))
         self.plot_item.addItem(self.target_line); layout.addWidget(header); layout.addWidget(self.plot_item)
         self.raw_t = None; self.raw_data_list = None; self.plot_item.sigXRangeChanged.connect(self.refresh_view)
@@ -380,19 +361,17 @@ class SmartPlotWidget(QFrame):
     def auto_scale(self): self.plot_item.enableAutoRange(axis='y')
     def request_pop_out(self): self.pop_out_req.emit(self.channel_id)
 
-    # [核心修改] 支持多条曲线更新
     def update_curves(self, t_axis, data_arrays, target_val):
         self.raw_t = t_axis
-        self.raw_data_list = data_arrays # 这是一个列表，包含1个或多个numpy array
+        self.raw_data_list = data_arrays
         self.target_line.setPos(target_val)
         
         # 确保曲线数量匹配
         while len(self.curves) < len(data_arrays):
-            # 新增曲线：样式轮询 (Solid -> Dash -> Dot -> DashDot)
-            style = [Qt.SolidLine, Qt.DashLine, Qt.DotLine, Qt.DashDotLine][len(self.curves) % 4]
-            # 颜色：使用通道色，但根据索引微调透明度或亮度，或者保持一致仅靠线型区分
-            # 这里选择保持颜色一致，仅靠线型区分，这样比较清晰是“同一组”
-            pen = pg.mkPen(color=self.color, width=1.5, style=style)
+            # [修改点] 强制所有线都使用 实线 (Qt.SolidLine)
+            # 同时也把线宽设为了 1.5，如果你觉得太粗可以改成 1.0
+            pen = pg.mkPen(color=self.color, width=1.5, style=Qt.SolidLine)
+            
             curve = self.plot_item.plot(pen=pen, skipFiniteCheck=True)
             self.curves.append(curve)
             
@@ -410,18 +389,12 @@ class SmartPlotWidget(QFrame):
         if idx_start > 0: idx_start -= 1
         if idx_end < len(self.raw_t): idx_end += 1
         if idx_end <= idx_start: return
-        
-        t_view = self.raw_t[idx_start:idx_end]
-        TARGET_POINTS = 3000
+        t_view = self.raw_t[idx_start:idx_end]; TARGET_POINTS = 3000
         step = max(1, len(t_view) // TARGET_POINTS)
-        
-        # 更新每一条线
         for i, data_arr in enumerate(self.raw_data_list):
             data_view = data_arr[idx_start:idx_end]
-            if len(data_view) > TARGET_POINTS:
-                self.curves[i].setData(t_view[::step], data_view[::step])
-            else:
-                self.curves[i].setData(t_view, data_view)
+            if len(data_view) > TARGET_POINTS: self.curves[i].setData(t_view[::step], data_view[::step])
+            else: self.curves[i].setData(t_view, data_view)
 
 # =============================================================================
 # 6. 主程序 MainWindow
@@ -438,14 +411,7 @@ class MainWindow(QMainWindow):
         self.last_confirmed_values = {i: 0.0 for i in range(6)}
     
         self.is_test_mode = False; self.serial_thread = None; self.is_paused = False
-
-        # --- 配置初始化 ---
-        self.protocol_config = {
-            'total_floats': 6,
-            'mappings': [[i] for i in range(6)] 
-        }
-        
-        # 初始化缓冲区
+        self.protocol_config = {'total_floats': 6, 'mappings': [[i] for i in range(6)]}
         self.reset_buffers()
 
         self.init_ui()
@@ -453,17 +419,11 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(); self.timer.timeout.connect(self.on_timer_tick); self.timer.start(30) 
 
     def reset_buffers(self):
-        # [核心修改] 缓冲区改为存储 原始的所有数据 (Total Floats x Time)
-        # 而不是 6 x Time
         self.total_floats = self.protocol_config.get('total_floats', 6)
         self.buffer_len = int(self.fs * self.max_history)
-        
-        # raw_history: 每一行是一个原始数据的历史
         self.raw_history = np.zeros((self.total_floats, self.buffer_len), dtype=np.float32)
         self.t_axis = np.linspace(-self.max_history, 0, self.buffer_len, dtype=np.float32)
         self.global_ptr = 0
-        
-        # 实时接收到的最新一帧数据 (N个)
         self.latest_raw_frame = np.zeros(self.total_floats, dtype=np.float32)
 
     def init_ui(self):
@@ -471,7 +431,7 @@ class MainWindow(QMainWindow):
         root_widget.setStyleSheet("QFrame#Root { background-color: #121212; border: 1px solid #444; border-radius: 8px; }")
         self.setCentralWidget(root_widget)
         root_layout = QVBoxLayout(root_widget); root_layout.setContentsMargins(0, 0, 0, 0); root_layout.setSpacing(0)
-        self.title_bar = CustomTitleBar(self, title="JustFloat Oscilloscope Pro v11.2")
+        self.title_bar = CustomTitleBar(self, title="JustFloat Oscilloscope Pro v11.4")
         root_layout.addWidget(self.title_bar)
 
         content_widget = QWidget(); main_layout = QHBoxLayout(content_widget); main_layout.setContentsMargins(15, 15, 15, 15)
@@ -486,20 +446,14 @@ class MainWindow(QMainWindow):
             QScrollBar:vertical { border: none; background: #1a1a1a; width: 8px; border-radius: 4px; }
         """)
         
-        # TAB 1: Controls
         tab_ctrl = QWidget(); tc_layout = QVBoxLayout(tab_ctrl); tc_layout.setSpacing(10); tc_layout.setContentsMargins(10, 15, 10, 15)
-        
         grp_conn = QGroupBox("CONNECTION"); grp_conn.setStyleSheet("QGroupBox{font-weight:bold; color:#888; border:1px solid #444; border-radius:6px; margin-top:10px;} QGroupBox::title{subcontrol-origin:margin; left:10px; padding:0 3px;}")
         gl = QVBoxLayout(grp_conn); gl.setSpacing(8)
         
         h_p = QHBoxLayout(); self.combo_port = QComboBox(); btn_ref = QPushButton("↻"); btn_ref.setFixedSize(25,25); btn_ref.clicked.connect(self.refresh_ports)
         self.combo_port.setStyleSheet("background:#2b2b2b; color:white; padding:4px;"); btn_ref.setStyleSheet("background:#333; color:#00E5FF; border:1px solid #555;")
-        
-        btn_cfg = QPushButton("⚙"); btn_cfg.setFixedSize(25, 25)
-        btn_cfg.setToolTip("Configure Data Protocol")
-        btn_cfg.setStyleSheet("background:#333; color:#E0E0E0; border:1px solid #555;")
+        btn_cfg = QPushButton("⚙"); btn_cfg.setFixedSize(25, 25); btn_cfg.setStyleSheet("background:#333; color:#E0E0E0; border:1px solid #555;")
         btn_cfg.clicked.connect(self.open_protocol_config)
-
         h_p.addWidget(self.combo_port); h_p.addWidget(btn_ref); h_p.addWidget(btn_cfg); gl.addLayout(h_p)
         self.combo_baud = QComboBox(); self.combo_baud.addItems(["9600","115200","921600","2000000"]); self.combo_baud.setCurrentText("115200")
         self.combo_baud.setStyleSheet("background:#2b2b2b; color:white; padding:4px;")
@@ -562,24 +516,84 @@ class MainWindow(QMainWindow):
     def create_control_card(self, idx):
         frame = QFrame(); frame.setStyleSheet(f"background: #1e1e1e; border-radius: 6px; border-left: 4px solid {self.colors[idx]};")
         l = QVBoxLayout(frame); l.setContentsMargins(10, 6, 10, 6); l.setSpacing(4)
-        h1 = QHBoxLayout(); title = QLabel(f"CH {idx+1}", styleSheet="color: #ddd; font-weight: bold;")
-        toggle = AnimatedToggle(active_color=self.colors[idx]); h1.addWidget(title); h1.addStretch(); h1.addWidget(toggle)
+        
+        # Row 1: Title + Local Plot Toggle
+        h1 = QHBoxLayout()
+        title = QLabel(f"CH {idx+1}", styleSheet="color: #ddd; font-weight: bold;")
+        toggle = AnimatedToggle(active_color=self.colors[idx]); 
+        h1.addWidget(title); h1.addStretch(); h1.addWidget(toggle)
+        
+        # Row 2: Value Set + Valve Button
         h2 = QHBoxLayout()
-        spin = QDoubleSpinBox(); spin.setRange(-99999, 99999); spin.setValue(0); spin.setFixedWidth(80)
+        spin = QDoubleSpinBox(); spin.setRange(-99999, 99999); spin.setValue(0); spin.setFixedWidth(70)
         spin.setStyleSheet("QDoubleSpinBox { background:#2b2b2b; color:white; border:1px solid #444; padding:2px; }")
         
         btn_send = QPushButton("SET")
-        btn_send.setFixedSize(40, 24); btn_send.setCursor(Qt.PointingHandCursor)
+        btn_send.setFixedSize(35, 24); btn_send.setCursor(Qt.PointingHandCursor)
         btn_send.setStyleSheet("QPushButton { background: #444; color: #fff; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; } QPushButton:hover { background: #555; }")
         btn_send.clicked.connect(lambda checked=False, i=idx: self.send_target_value(i))
         
-        val_lbl = QLabel("0.00"); val_lbl.setFixedWidth(80); val_lbl.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
+        # [新增] 独立的开关按钮 (Checkable Button)
+        btn_valve = QPushButton("OFF")
+        btn_valve.setCheckable(True)
+        btn_valve.setFixedSize(40, 24)
+        btn_valve.setCursor(Qt.PointingHandCursor)
+        # 初始样式 (灰色/红色)
+        self.update_valve_btn_style(btn_valve)
+        btn_valve.clicked.connect(lambda checked, i=idx: self.on_valve_btn_clicked(i, checked))
+
+        val_lbl = QLabel("0.00"); val_lbl.setFixedWidth(70); val_lbl.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
         val_lbl.setStyleSheet(f"color: {self.colors[idx]}; font-family: Consolas; font-weight: bold; font-size: 14px;")
-        h2.addWidget(QLabel("Ref:", styleSheet="border:none; color:#aaa")); h2.addWidget(spin); h2.addWidget(btn_send); h2.addStretch(); h2.addWidget(val_lbl)
+        
+        h2.addWidget(QLabel("Ref:", styleSheet="border:none; color:#aaa; font-size:11px;")); h2.addWidget(spin); h2.addWidget(btn_send)
+        h2.addWidget(btn_valve) # 添加到布局
+        h2.addStretch(); h2.addWidget(val_lbl)
+        
         l.addLayout(h1); l.addLayout(h2)
-        frame.toggle = toggle; frame.spin = spin; frame.btn_send = btn_send; frame.val_lbl = val_lbl
+        frame.toggle = toggle; frame.spin = spin; frame.btn_send = btn_send; frame.btn_valve = btn_valve; frame.val_lbl = val_lbl
         spin.editingFinished.connect(btn_send.click)
         return frame
+
+    def update_valve_btn_style(self, btn):
+        # 基础样式：圆角、粗体
+        base_style = "border: none; border-radius: 4px; font-weight: bold; font-size: 10px;"
+        
+        if btn.isChecked():
+            btn.setText("ON")
+            # 正常状态: 绿色 | 锁定状态(Disabled):以此为基础变暗
+            btn.setStyleSheet(f"""
+                QPushButton {{ background: #2e7d32; color: white; {base_style} }}
+                QPushButton:disabled {{ background: #1b5e20; color: #999; }} 
+            """)
+        else:
+            btn.setText("OFF")
+            # 正常状态: 红色 | 锁定状态(Disabled):以此为基础变暗
+            btn.setStyleSheet(f"""
+                QPushButton {{ background: #c62828; color: #ddd; {base_style} }}
+                QPushButton:disabled {{ background: #7f0000; color: #999; }}
+            """)
+
+    def on_valve_btn_clicked(self, idx, checked):
+        btn = self.ctrl_widgets[idx].btn_valve
+        
+        # 1. 立即更新UI到“目标状态”的样式
+        self.update_valve_btn_style(btn)
+        
+        if self.serial_thread and self.serial_thread.isRunning():
+            # 2. 【核心修改】立即锁定按钮，防止重复点击
+            btn.setEnabled(False) 
+            
+            # 3. 发送指令
+            state_str = "on" if checked else "off"
+            cmd = f"#{idx+1},{state_str}#" 
+            self.serial_thread.send_command_reliable(cmd, idx, cmd_type="toggle")
+        else:
+            self.append_log("Warning: Not Connected", "#FFA500")
+            # 未连接时的处理：立即回滚并保持解锁
+            btn.blockSignals(True)
+            btn.setChecked(not checked) # 回滚状态
+            self.update_valve_btn_style(btn) # 恢复样式
+            btn.blockSignals(False)
 
     def open_protocol_config(self):
         dlg = ProtocolConfigDialog(self.protocol_config, self)
@@ -587,10 +601,7 @@ class MainWindow(QMainWindow):
             new_conf = dlg.get_data()
             self.protocol_config = new_conf
             self.append_log(f"Protocol Updated: {new_conf['total_floats']} Floats/Frame", "#00E5FF")
-            
-            # 配置变更后，需要重置缓冲区以适应新的 Total Floats
             self.reset_buffers()
-            
             if self.serial_thread and self.serial_thread.isRunning():
                 self.serial_thread.set_num_floats(new_conf['total_floats'])
 
@@ -601,19 +612,49 @@ class MainWindow(QMainWindow):
             self.ctrl_widgets[idx].btn_send.setEnabled(False) 
             val = self.ctrl_widgets[idx].spin.value()
             cmd = f"#{val:.2f},valve{idx+1}#"
-            self.serial_thread.send_command_reliable(cmd, idx)
+            self.serial_thread.send_command_reliable(cmd, idx, cmd_type="value")
         else:
             self.append_log("Warning: Not Connected", "#FFA500")
 
-    def on_ack_received(self, channel_id, is_success):
-        if 0 <= channel_id < len(self.ctrl_widgets):
-            widget = self.ctrl_widgets[channel_id]; spin = widget.spin; btn = widget.btn_send
-            spin.setEnabled(True); btn.setEnabled(True)
-            if is_success: self.last_confirmed_values[channel_id] = spin.value()
+    def on_ack_received(self, channel_id, is_success, cmd_type):
+        if channel_id < 0 or channel_id >= len(self.ctrl_widgets): return
+        
+        widget = self.ctrl_widgets[channel_id]
+        
+        # --- 处理数值设置 (Ref) ---
+        if cmd_type == "value":
+            # 1. 无论成功失败，先解锁！
+            widget.spin.setEnabled(True)
+            widget.btn_send.setEnabled(True)
+            
+            if is_success: 
+                self.last_confirmed_values[channel_id] = widget.spin.value()
+                self.append_log(f"CH{channel_id+1} Value Set Success", "#00FF00")
             else:
+                # 失败：回滚数值
                 old_val = self.last_confirmed_values.get(channel_id, 0.0)
-                spin.blockSignals(True); spin.setValue(old_val); spin.blockSignals(False)
-                self.append_log(f"CH{channel_id+1} Failed: Reverted to {old_val:.2f}", "#FF5252")
+                widget.spin.blockSignals(True)
+                widget.spin.setValue(old_val)
+                widget.spin.blockSignals(False)
+                self.append_log(f"CH{channel_id+1} Set Failed (Timeout)", "#FF5252")
+        
+        # --- 处理开关切换 (ON/OFF) ---
+        elif cmd_type == "toggle":
+            btn = widget.btn_valve
+            # 1. 无论成功失败，先解锁！
+            btn.setEnabled(True)
+            
+            if is_success:
+                state_s = "ON" if btn.isChecked() else "OFF"
+                self.append_log(f"CH{channel_id+1} switched to {state_s}", "#00FF00")
+            else:
+                # 失败：回滚状态
+                curr = btn.isChecked()
+                btn.blockSignals(True)
+                btn.setChecked(not curr) # 回滚
+                self.update_valve_btn_style(btn) # 恢复颜色
+                btn.blockSignals(False)
+                self.append_log(f"CH{channel_id+1} Toggle Failed (Timeout)", "#FF5252")
 
     def append_log(self, text, color="#CCCCCC"):
         t_str = datetime.now().strftime("[%H:%M:%S] ")
@@ -627,19 +668,13 @@ class MainWindow(QMainWindow):
 
     def clear_buffer(self):
         self.raw_history.fill(0)
-        # 刷新所有图表
         for i in range(6):
-            # 获取配置
             indices = self.protocol_config['mappings'][i]
             target = self.ctrl_widgets[i].spin.value()
-            
-            # 构建空数据列表
             data_list = []
             for idx in indices:
                 if idx < self.total_floats: data_list.append(self.raw_history[idx])
-            
             if not data_list: data_list = [np.zeros(self.buffer_len)]
-
             self.plot_widgets[i+1].update_curves(self.t_axis, data_list, target)
             self.ctrl_widgets[i].val_lbl.setText("0.00")
         self.append_log("Buffer Cleared", "#888888")
@@ -679,13 +714,9 @@ class MainWindow(QMainWindow):
     
     @Slot(list)
     def on_serial_data(self, data):
-        # 仅在非测试模式下更新
         if not self.is_test_mode:
-            # 只要长度匹配，就直接存入
-            if len(data) == self.total_floats:
-                self.latest_raw_frame = np.array(data, dtype=np.float32)
+            if len(data) == self.total_floats: self.latest_raw_frame = np.array(data, dtype=np.float32)
             else:
-                # 长度不匹配时，尝试兼容
                 min_len = min(len(data), self.total_floats)
                 self.latest_raw_frame[:min_len] = data[:min_len]
 
@@ -710,71 +741,38 @@ class MainWindow(QMainWindow):
     def on_timer_tick(self):
         if self.is_paused: return
         chunk_size = 30 
+        self.raw_history = np.roll(self.raw_history, -chunk_size, axis=1); self.global_ptr += chunk_size
+        t_start = self.global_ptr / self.fs; t_chunk = np.linspace(t_start, t_start + chunk_size/self.fs, chunk_size, dtype=np.float32)
         
-        # 1. 滚动整个原始数据缓冲区 (Total Floats x Time)
-        self.raw_history = np.roll(self.raw_history, -chunk_size, axis=1)
-        self.global_ptr += chunk_size
-        t_start = self.global_ptr / self.fs
-        t_chunk = np.linspace(t_start, t_start + chunk_size/self.fs, chunk_size, dtype=np.float32)
-        
-        # 2. 生成新数据块
         new_block = np.zeros((self.total_floats, chunk_size), dtype=np.float32)
-
         if self.is_test_mode:
-            # 测试模式：生成 N 条随机正弦波
             for k in range(self.total_floats):
                 noise = np.random.normal(0, 0.5, chunk_size)
-                # 制造一些相位差，让分组显示更明显
                 wave = 10 * np.sin(2 * np.pi * (1 + (k%3)*0.5) * t_chunk + k)
-                # 叠加一个基准偏移，模拟不同通道的数值
-                offset = (k // 3) * 10
-                new_block[k, :] = wave + noise + offset
+                new_block[k, :] = wave + noise + ((k // 3) * 10)
         else:
-            # 串口模式：简单的 Sample & Hold (重复最新帧)
-            # 将 (N,) 广播到 (N, chunk_size)
             new_block = np.tile(self.latest_raw_frame[:, np.newaxis], (1, chunk_size))
-
-        # 填入最后一段
         self.raw_history[:, -chunk_size:] = new_block
 
-        # 3. 分发数据给 6 个显示通道
         mappings = self.protocol_config['mappings']
-        
         for i in range(6):
-            ctrl = self.ctrl_widgets[i]
-            target = ctrl.spin.value()
-            
-            # 如果开关开启，准备显示数据
+            ctrl = self.ctrl_widgets[i]; target = ctrl.spin.value()
             if ctrl.toggle.isChecked():
-                indices = mappings[i]
-                channel_data_list = []
-                current_val = 0.0
-                
-                # 提取配置的所有索引对应的数据行
+                indices = mappings[i]; channel_data_list = []; current_val = 0.0
                 for idx in indices:
                     if idx < self.total_floats:
-                        row_data = self.raw_history[idx]
-                        channel_data_list.append(row_data)
-                        # 更新数字显示（取第一个索引的最新值作为代表）
-                        if idx == indices[0]:
-                            current_val = row_data[-1]
-                
-                if not channel_data_list: # 防御性空值处理
-                    channel_data_list = [np.zeros(self.buffer_len)]
-
+                        row_data = self.raw_history[idx]; channel_data_list.append(row_data)
+                        if idx == indices[0]: current_val = row_data[-1]
+                if not channel_data_list: channel_data_list = [np.zeros(self.buffer_len)]
                 self.plot_widgets[i+1].update_curves(self.t_axis, channel_data_list, target)
                 ctrl.val_lbl.setText(f"{current_val:>9.2f}")
-                
             else:
-                # 关闭时显示一条零线
                 self.plot_widgets[i+1].update_curves(self.t_axis, [np.zeros(self.buffer_len)], target)
                 ctrl.val_lbl.setText("0.00")
 
 
-try:
-    app = QApplication(sys.argv)
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec())
-except Exception:
-    traceback.print_exc()
+app = QApplication(sys.argv)
+win = MainWindow()
+win.show()
+sys.exit(app.exec())
+traceback.print_exc()
