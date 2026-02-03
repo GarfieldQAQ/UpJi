@@ -521,10 +521,12 @@ class MainWindow(QMainWindow):
         h1 = QHBoxLayout()
         title = QLabel(f"CH {idx+1}", styleSheet="color: #ddd; font-weight: bold;")
         toggle = AnimatedToggle(active_color=self.colors[idx]); 
+        
+        # [修改 1] 防止 toggle 获取焦点
+        toggle.setFocusPolicy(Qt.NoFocus) 
+
         h1.addWidget(title); h1.addStretch(); h1.addWidget(toggle)
         
-      
-
         # Row 2: Value Set + Valve Button
         h2 = QHBoxLayout()
         spin = QDoubleSpinBox(); spin.setRange(-99999, 99999); spin.setValue(0); spin.setFixedWidth(70)
@@ -533,16 +535,19 @@ class MainWindow(QMainWindow):
         btn_send = QPushButton("SET")
         btn_send.setFixedSize(35, 24); btn_send.setCursor(Qt.PointingHandCursor)
         btn_send.setStyleSheet("QPushButton { background: #444; color: #fff; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; } QPushButton:hover { background: #555; }")
+        # [可选] btn_send 也可以设置 NoFocus
+        btn_send.setFocusPolicy(Qt.NoFocus)
         btn_send.clicked.connect(lambda checked=False, i=idx: self.send_target_value(i))
-    
         
         # [新增] 独立的开关按钮 (Checkable Button)
         btn_valve = QPushButton("OFF")
         btn_valve.setCheckable(True)
         btn_valve.setFixedSize(40, 24)
         btn_valve.setCursor(Qt.PointingHandCursor)
+        
         # [修改 2] 关键点：设置无焦点策略，点击后焦点不会从上一行跳到这里，也不会跳到下一行
         btn_valve.setFocusPolicy(Qt.NoFocus)
+
         # 初始样式 (灰色/红色)
         self.update_valve_btn_style(btn_valve)
         btn_valve.clicked.connect(lambda checked, i=idx: self.on_valve_btn_clicked(i, checked))
@@ -585,17 +590,29 @@ class MainWindow(QMainWindow):
         self.update_valve_btn_style(btn)
         
         if self.serial_thread and self.serial_thread.isRunning():
-            # 2. 【核心修改】立即锁定按钮，防止重复点击
+            # 立即锁定按钮，防止重复点击
             btn.setEnabled(False) 
             
-            # 3. 发送指令
-            state_str = "on" if checked else "off"
-            cmd = f"#{idx+1},{state_str}#" 
-            self.serial_thread.send_command_reliable(cmd, idx, cmd_type="toggle")
-            # if not state_str == "on":
-            #     val = 0
-            #     cmd = f"#{val:.2f},valve{idx+1}#"
-            #     self.serial_thread.send_command_reliable(cmd, idx, cmd_type="value")
+            if checked:
+                # [情况 A] 点击了 ON：发送正常的开启命令
+                # 假设开启命令依然是 #ID,on#
+                cmd = f"#{idx+1},on#" 
+                # cmd_type="toggle" 保证回复收到后解锁的是 btn_valve
+                self.serial_thread.send_command_reliable(cmd, idx, cmd_type="toggle")
+            else:
+                # [情况 B] 点击了 OFF：
+                # 1. 设置 Target UI 为 0
+                self.ctrl_widgets[idx].spin.setValue(0.0)
+                
+                # 2. 发送“设置为 0”的命令 (根据您的描述，这样才能关闭成功)
+                # 命令格式参考 send_target_value: #数值,valve通道号#
+                cmd = f"#0.00,valve{idx+1}#"
+                
+                # 注意：这里我们依然使用 cmd_type="toggle"。
+                # 原因是：是“开关按钮”触发了这个动作，当串口回复 Success 时，
+                # 我们希望解锁的是“开关按钮(btn_valve)”，而不是“SET按钮(btn_send)”。
+                self.serial_thread.send_command_reliable(cmd, idx, cmd_type="toggle")
+
         else:
             self.append_log("Warning: Not Connected", "#FFA500")
             # 未连接时的处理：立即回滚并保持解锁
@@ -603,7 +620,6 @@ class MainWindow(QMainWindow):
             btn.setChecked(not checked) # 回滚状态
             self.update_valve_btn_style(btn) # 恢复样式
             btn.blockSignals(False)
-
 
     def open_protocol_config(self):
         dlg = ProtocolConfigDialog(self.protocol_config, self)
